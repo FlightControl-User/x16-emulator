@@ -392,8 +392,11 @@ is_kernal()
 static void
 usage()
 {
-	printf("\nCommander X16 Emulator r%s (%s)\n", VER, VER_NAME);
-	printf("(C)2019, 2023 Michael Steil et al.\n");
+	printf("\nCommander X16 Emulator r%s (%s)", VER, VER_NAME);
+#ifdef GIT_REV
+	printf(", "GIT_REV);
+#endif
+	printf("\n(C)2019, 2023 Michael Steil et al.\n");
 	printf("All rights reserved. License: 2-clause BSD\n\n");
 	printf("Usage: x16emu [option] ...\n\n");
 	printf("-rom <rom.bin>\n");
@@ -475,7 +478,9 @@ usage()
 	printf("-debug [<address>]\n");
 	printf("\tEnable debugger. Optionally, set a breakpoint\n");
 	printf("-randram\n");
-	printf("\tSet all RAM to random values\n");
+	printf("\t(deprecated, no effect)\n");
+	printf("-zeroram\n");
+	printf("\tSet all RAM to zero instead of uninitialized random values\n");
 	printf("-wuninit\n");
 	printf("\tPrints warning to stdout if uninitialized RAM is accessed\n");
 	printf("-dump {C|R|B|V}...\n");
@@ -538,7 +543,7 @@ main(int argc, char **argv)
 	bool run_test = false;
 	int test_number = 0;
 	int audio_buffers = 8;
-	bool randram = false;
+	bool zeroram = false;
 
 	const char *audio_dev_name = NULL;
 
@@ -550,6 +555,7 @@ main(int argc, char **argv)
 	// no ROM file is specified on the command line.
 	memcpy(rom_path, base_path, strlen(base_path) + 1);
 	strncpy(rom_path + strlen(rom_path), rom_filename, PATH_MAX - strlen(rom_path));
+	memory_randomize_ram(true);
 
 	argc--;
 	argv++;
@@ -783,10 +789,14 @@ main(int argc, char **argv)
 				argv++;
 			}
 		} else if (!strcmp(argv[0], "-randram")) {
+			/* this operation has no effect anymore, randomizing the Ram is now default */
 			argc--;
 			argv++;
-			memory_randomize_ram(true);
-			randram = true;
+		} else if (!strcmp(argv[0], "-zeroram")) {
+			argc--;
+			argv++;
+			memory_randomize_ram(false);
+			zeroram = true;
 		} else if (!strcmp(argv[0], "-wuninit")) {
 			argc--;
 			argv++;
@@ -924,6 +934,11 @@ main(int argc, char **argv)
 			has_via2 = true;
 		} else if (!strcmp(argv[0], "-version")){
 			printf("%s", VER_INFO);
+#ifdef GIT_REV
+			printf(" "GIT_REV"\n");
+#else
+			printf("\n");
+#endif
 			argc--;
 			argv++;
 			exit(0);
@@ -961,10 +976,10 @@ main(int argc, char **argv)
 	}
 
 	if (cartridge_path) {
-		if (!cartridge_load(cartridge_path, randram)) {
+		if (!cartridge_load(cartridge_path, !zeroram)) {
 			printf("Cannot open %s!\n", cartridge_path);
 			exit(1);
-		}		
+		}
 	}
 
 	prg_override_start = -1;
@@ -1157,6 +1172,8 @@ handle_ieee_intercept()
 		return false;
 	}
 
+	uint64_t base_ticks = SDL_GetPerformanceCounter();
+
 	static int count_unlistn = 0;
 	bool handled = true;
 	int s = -1;
@@ -1215,6 +1232,9 @@ handle_ieee_intercept()
 	}
 
 	if (handled) {
+		// Add the number CPU cycles equivalent to the amount of time that the operation actually took
+		// to prevent the emu from warping after a hostfs load
+		clockticks6502 += (uint64_t)((SDL_GetPerformanceCounter() - base_ticks) * 1000000 * MHZ) / SDL_GetPerformanceFrequency();
 		if (s >= 0) {
 			if (!set_kernal_status(s)) {
 				printf("Warning: Could not set STATUS!\n");
